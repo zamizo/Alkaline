@@ -1,6 +1,6 @@
 # Alkaline
 
-The opposite of ACID: a loop-based music workstation in the spirit of Sonic Foundry / Sony ACID, running in the browser.
+A loop-based music workstation in the spirit of Sonic Foundry / Sony ACID, running in the browser.
 
 - Every track follows the project tempo (time-stretch) and key (repitch) together, with per-track pitch on top
 - Import your own WAV/MP3 loops — they are time-stretched with WSOLA
