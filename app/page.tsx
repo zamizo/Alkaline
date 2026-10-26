@@ -330,7 +330,8 @@ function ClipView({
         {loop.name}
       </div>
       <canvas ref={ref} />
-      <div className="handle" />
+      <div className="handle start" title="Trim start" />
+      <div className="handle end" title="Trim end" />
     </div>
   );
 }
@@ -402,7 +403,24 @@ engine.loops = { ...LOOP_BY_ID };
 // Last rendered waveform per track, shown while a new tempo/key renders
 const lastWave = new Map<string, AudioBuffer>();
 
-type DragState = { kind: "paint" | "move" | "resize" | "erase"; trackId: string; clip?: Clip; grab: number; origin: number };
+type DragState = { kind: "paint" | "move" | "resize" | "trimStart" | "erase"; trackId: string; clip?: Clip; grab: number; origin: number };
+
+// Grab within this many pixels of a clip edge trims that edge. On a short
+// clip the two zones overlap, so the nearer edge wins.
+const EDGE_PX = 7;
+
+function clipEdge(xPx: number, clip: Clip, ppb: number): "start" | "end" | null {
+  const left = clip.start * ppb;
+  const right = (clip.start + clip.len) * ppb;
+  const fromLeft = xPx - left;
+  const fromRight = right - xPx;
+  const nearLeft = fromLeft < EDGE_PX;
+  const nearRight = fromRight < EDGE_PX;
+  if (nearLeft && nearRight) return fromLeft <= fromRight ? "start" : "end";
+  if (nearLeft) return "start";
+  if (nearRight) return "end";
+  return null;
+}
 
 export default function AlkalinePage() {
   const [project, setProject] = useState<Project>(demoProject);
@@ -771,6 +789,13 @@ export default function AlkalinePage() {
 
   // ---- timeline pointer handling ----
 
+  // The drag preview has to be readable on pointerup, which can arrive before
+  // the layout effect copies state into ghostRef.
+  const showGhost = (g: { trackId: string; clip: Clip } | null) => {
+    ghostRef.current = g;
+    setGhost(g);
+  };
+
   const laneBar = (e: { clientX: number }, el: Element) => (e.clientX - el.getBoundingClientRect().left) / ppb;
 
   const onLaneDown = (e: RPointerEvent<HTMLDivElement>, track: Track) => {
@@ -793,14 +818,16 @@ export default function AlkalinePage() {
     }
     if (under) {
       setSelClip(under.id);
-      const nearEdge = e.clientX - e.currentTarget.getBoundingClientRect().left > (under.start + under.len) * ppb - 7;
-      dragRef.current = { kind: nearEdge ? "resize" : "move", trackId: track.id, clip: under, grab: b - under.start, origin: b };
-      setGhost({ trackId: track.id, clip: under });
+      const xPx = e.clientX - e.currentTarget.getBoundingClientRect().left;
+      const edge = clipEdge(xPx, under, ppb);
+      const kind = edge === "start" ? "trimStart" : edge === "end" ? "resize" : "move";
+      dragRef.current = { kind, trackId: track.id, clip: under, grab: b - under.start, origin: b };
+      showGhost({ trackId: track.id, clip: under });
     } else if (tool === "draw") {
       const c = makeClip(Math.floor(b), 1, Math.floor(b) % allLoops[track.loopId].bars);
       setSelClip(c.id);
       dragRef.current = { kind: "paint", trackId: track.id, clip: c, grab: 0, origin: Math.floor(b) };
-      setGhost({ trackId: track.id, clip: c });
+      showGhost({ trackId: track.id, clip: c });
     } else {
       setSelClip(null);
       seek(Math.round(b * 4) / 4);
@@ -827,8 +854,13 @@ export default function AlkalinePage() {
       next = { ...c, start: Math.max(0, Math.round(b - d.grab)) };
     } else if (d.kind === "resize") {
       next = { ...c, len: Math.max(1, Math.round(b - c.start)) };
+    } else if (d.kind === "trimStart") {
+      const end = c.start + c.len;
+      const start = Math.min(end - 1, Math.max(0, Math.round(b)));
+      const delta = start - c.start;
+      next = { ...c, start, len: c.len - delta, offset: c.offset + delta };
     }
-    setGhost({ trackId: track.id, clip: next });
+    showGhost({ trackId: track.id, clip: next });
   };
 
   const onLaneUp = () => {
@@ -837,7 +869,7 @@ export default function AlkalinePage() {
     if (!d) return;
     const g = ghostRef.current;
     if (g) updateTrack(g.trackId, (t) => ({ events: placeClip(t.events, g.clip) }));
-    setGhost(null);
+    showGhost(null);
   };
 
   // ---- ruler / loop region ----

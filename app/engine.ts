@@ -783,7 +783,10 @@ export class Engine {
         src.buffer = buf;
         src.loop = true;
         src.connect(g);
-        src.start(ev.start * barSec, (ev.offset % loopBars) * barSec);
+        // `%` keeps the sign of the dividend. Extending a clip past the loop
+        // start stores a negative offset, which AudioBufferSource rejects.
+        const phase = ((ev.offset % loopBars) + loopBars) % loopBars;
+        src.start(ev.start * barSec, phase * barSec);
         src.stop((ev.start + ev.len) * barSec);
       }
     }

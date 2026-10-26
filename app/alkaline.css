@@ -531,7 +531,7 @@
   height: 12px;
   font-size: 9px;
   line-height: 12px;
-  padding: 0 3px;
+  padding: 0 8px;
   white-space: nowrap;
   overflow: hidden;
   color: #fff;
@@ -547,11 +547,18 @@
 
 .clip .handle {
   position: absolute;
-  right: 0;
   top: 0;
   bottom: 0;
   width: 6px;
   cursor: ew-resize;
+}
+
+.clip .handle.start {
+  left: 0;
+}
+
+.clip .handle.end {
+  right: 0;
 }
 
 .cursor {
