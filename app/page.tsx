@@ -14,6 +14,7 @@ import {
   type Project,
   type Track,
 } from "./engine";
+import { parseProject, ProjectFileError, serializeProject } from "./projectFile";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -441,6 +442,7 @@ export default function AlkalinePage() {
   const [masterVol, setMasterVol] = useState(0.8);
   const [previewVol, setPreviewVol] = useState(0.8);
   const [status, setStatus] = useState("Ready");
+  const [docName, setDocName] = useState("Untitled");
   const [dialog, setDialog] = useState<"about" | null>(null);
   const [dropOver, setDropOver] = useState(false);
 
@@ -458,6 +460,7 @@ export default function AlkalinePage() {
   const meterR = useRef<HTMLElement>(null);
   const meterP = useRef<HTMLElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const projectInput = useRef<HTMLInputElement>(null);
 
   const ppbRef = useRef(ppb);
   const ghostRef = useRef(ghost);
@@ -478,7 +481,11 @@ export default function AlkalinePage() {
   // ---- engine wiring ----
 
   useEffect(() => {
-    document.title = "Untitled - Alkaline";
+    const base = docName.replace(/\.json$/i, "");
+    document.title = `${base} - Alkaline`;
+  }, [docName]);
+
+  useEffect(() => {
     engine.getProject = () => liveRef.current;
     engine.onBuffer = () => setBufVersion((v) => v + 1);
     engine.onEnded = () => {
@@ -736,6 +743,8 @@ export default function AlkalinePage() {
     setProject(emptyProject());
     setCursor(0);
     setSelTracks([]);
+    setSelClip(null);
+    setDocName("Untitled");
     setStatus("New project — drag loops from the Explorer onto the timeline");
   }, []);
 
@@ -744,8 +753,62 @@ export default function AlkalinePage() {
     setPlaying(false);
     setProject(demoProject());
     setCursor(0);
+    setSelClip(null);
+    setDocName("Demo");
     setStatus("Demo project loaded");
   }, []);
+
+  const duplicateClip = useCallback(() => {
+    const found = project.tracks
+      .map((t) => ({ track: t, clip: t.events.find((c) => c.id === selClip) }))
+      .find((x) => x.clip);
+    if (!found?.clip) {
+      setStatus("Select a clip to duplicate");
+      return;
+    }
+    const clip = found.clip;
+    const copy: Clip = { id: uid("c"), start: clip.start + clip.len, len: clip.len, offset: clip.offset };
+    updateTrack(found.track.id, (t) => ({ events: placeClip(t.events, copy) }));
+    setSelClip(copy.id);
+    setSelTracks([found.track.id]);
+    setStatus("Duplicated clip");
+  }, [project.tracks, selClip, updateTrack]);
+
+  const saveProject = useCallback(() => {
+    const fileName = docName.toLowerCase().endsWith(".json") ? docName : "alkaline-project.json";
+    const blob = new Blob([serializeProject(project, userLoops)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    setStatus(`Saved ${fileName}`);
+  }, [docName, project, userLoops]);
+
+  const openProjectFile = useCallback((file: File) => {
+    void file.text().then((text) => {
+      try {
+        const { project: next, loops } = parseProject(text);
+        engine.stop();
+        setPlaying(false);
+        for (const id of new Set([...Object.keys(userLoops), ...Object.keys(loops)])) engine.invalidate(id);
+        engine.loops = { ...LOOP_BY_ID, ...loops };
+        setUserLoops(loops);
+        setProject(next);
+        setCursor(0);
+        setSelTracks([]);
+        setSelClip(null);
+        setDocName(file.name);
+        if (Object.keys(loops).length) {
+          setCategory("Imported");
+          setSelLoopId(Object.values(loops)[0].id);
+        }
+        setStatus(`Opened ${file.name}`);
+      } catch (err) {
+        setStatus(err instanceof ProjectFileError ? err.message : "Could not open that file");
+      }
+    });
+  }, [userLoops]);
 
   const deleteSelection = useCallback(() => {
     if (selClip) {
@@ -765,6 +828,19 @@ export default function AlkalinePage() {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       const k = e.key.toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        if (k === "d") {
+          e.preventDefault();
+          duplicateClip();
+        } else if (k === "s") {
+          e.preventDefault();
+          saveProject();
+        } else if (k === "o") {
+          e.preventDefault();
+          projectInput.current?.click();
+        }
+        return;
+      }
       if (e.metaKey || e.ctrlKey) return;
       if (k === " ") {
         e.preventDefault();
@@ -785,7 +861,7 @@ export default function AlkalinePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, pause, seek, setKey, togglePlay, update, zoom]);
+  }, [deleteSelection, duplicateClip, pause, saveProject, seek, setKey, togglePlay, update, zoom]);
 
   // ---- timeline pointer handling ----
 
@@ -940,6 +1016,8 @@ export default function AlkalinePage() {
       name: "File",
       items: [
         { label: "New", key: "", action: newProject },
+        { label: "Open…", key: "Ctrl+O", action: () => projectInput.current?.click() },
+        { label: "Save", key: "Ctrl+S", action: saveProject },
         { label: "Open Demo Project", action: loadDemo },
         "sep",
         { label: "Import Audio…", action: () => fileInput.current?.click() },
@@ -953,6 +1031,7 @@ export default function AlkalinePage() {
       items: [
         { label: "Undo" },
         "sep",
+        { label: "Duplicate", key: "Ctrl+D", action: duplicateClip, disabled: !selClip },
         { label: "Delete", key: "Del", action: deleteSelection, disabled: !selClip && !selTracks.length },
         { label: "Select All Tracks", action: () => setSelTracks(project.tracks.map((t) => t.id)) },
       ],
@@ -1002,7 +1081,7 @@ export default function AlkalinePage() {
     <div className="alkaline" ref={rootRef} onContextMenu={(e) => e.preventDefault()}>
       <div className="titlebar">
         <Icon.Wave />
-        <span>Untitled - Alkaline</span>
+        <span>{docName.replace(/\.json$/i, "")} - Alkaline</span>
         <div className="tb-ctrl">
           <span className="raised">_</span>
           <span className="raised">□</span>
@@ -1049,6 +1128,17 @@ export default function AlkalinePage() {
           onChange={(e) => {
             void importFiles([...(e.target.files ?? [])]);
             e.target.value = "";
+          }}
+        />
+        <input
+          ref={projectInput}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) openProjectFile(file);
           }}
         />
       </div>
